@@ -1,0 +1,83 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.setupWebsocket = setupWebsocket;
+exports.subscribeToTransactions = subscribeToTransactions;
+const ws_1 = __importDefault(require("ws"));
+const handler_1 = require("./handler");
+const MAX_RECONNECT_ATTEMPTS = 10;
+function setupWebsocket() {
+    const config = global.config;
+    let reconnectAttempts = 0;
+    let ws = null;
+    function connect() {
+        ws = new ws_1.default(`wss://atlas-mainnet.helius-rpc.com?api-key=${config.apiKey}`);
+        ws.on("open", function open() {
+            console.log("WebSocket connection established");
+            reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+            subscribeToTransactions(ws, config);
+        });
+        ws.on("message", function incoming(data) {
+            const messageStr = data.toString("utf8");
+            try {
+                const messageObj = JSON.parse(messageStr);
+                if (messageObj.method === "transactionNotification") {
+                    (0, handler_1.handleTransaction)(messageObj.params.result);
+                }
+            }
+            catch (e) {
+                console.error("Failed to parse JSON:", e);
+            }
+        });
+        ws.on("error", function error(err) {
+            console.error("WebSocket error:", err);
+        });
+        ws.on("close", function close(code, reason) {
+            console.log(`WebSocket connection closed. Code: ${code}, Reason: ${reason}`);
+            ws = null;
+            reconnect();
+        });
+    }
+    function reconnect() {
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            console.error("Max reconnection attempts reached. Stopping reconnection.");
+            return;
+        }
+        reconnectAttempts++;
+        console.log(`Attempting to reconnect... (Attempt ${reconnectAttempts})`);
+        setTimeout(() => {
+            connect();
+        }, config.websocketReconnectInterval);
+    }
+    connect();
+    return () => {
+        if (ws) {
+            ws.close();
+        }
+    };
+}
+function subscribeToTransactions(ws, config) {
+    const subscribeMessage = {
+        jsonrpc: "2.0",
+        id: 420,
+        method: "transactionSubscribe",
+        params: [
+            {
+                accountInclude: config.addresses,
+                vote: false,
+                failed: false,
+            },
+            {
+                commitment: "confirmed",
+                encoding: "jsonParsed",
+                transactionDetails: "full",
+                showRewards: false,
+                maxSupportedTransactionVersion: 0,
+            },
+        ],
+    };
+    ws.send(JSON.stringify(subscribeMessage));
+    console.log("Subscribed to transactions");
+}
